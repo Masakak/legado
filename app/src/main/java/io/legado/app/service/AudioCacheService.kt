@@ -1,19 +1,25 @@
 package io.legado.app.service
 
 import android.content.Intent
+import androidx.core.app.NotificationCompat
 import androidx.lifecycle.lifecycleScope
+import io.legado.app.R
 import io.legado.app.base.BaseService
+import io.legado.app.constant.AppConst
 import io.legado.app.constant.IntentAction
+import io.legado.app.constant.NotificationId
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.AudioChapterCache
 import io.legado.app.model.AudioCache
 import io.legado.app.model.analyzeRule.AnalyzeUrl
 import io.legado.app.utils.FileUtils
+import io.legado.app.utils.servicePendingIntent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import splitties.init.appCtx
+import splitties.systemservices.notificationManager
 import java.io.File
 
 class AudioCacheService : BaseService() {
@@ -24,6 +30,23 @@ class AudioCacheService : BaseService() {
     }
 
     private var downloadJob: Job? = null
+    private var notificationContent = appCtx.getString(R.string.service_starting)
+    private var totalCount = 0
+    private var finishedCount = 0
+    private var failedCount = 0
+    private val notificationBuilder by lazy {
+        NotificationCompat.Builder(this, AppConst.channelIdDownload)
+            .setSmallIcon(R.drawable.ic_download)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setContentTitle(getString(R.string.audio_cache))
+            .addAction(
+                R.drawable.ic_stop_black_24dp,
+                getString(R.string.cancel),
+                servicePendingIntent<AudioCacheService>(IntentAction.stop)
+            )
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -66,10 +89,19 @@ class AudioCacheService : BaseService() {
             val source = appDb.bookSourceDao.getBookSource(book.origin) ?: return@launch
             val chapterCount = appDb.bookChapterDao.getChapterCount(bookUrl)
             if (chapterCount <= 0) return@launch
+            val startIndex = start.coerceAtLeast(0)
             val endIndex = if (end < 0) chapterCount - 1 else minOf(end, chapterCount - 1)
-            for (index in start..endIndex) {
+            if (startIndex > endIndex) return@launch
+            totalCount = endIndex - startIndex + 1
+            finishedCount = 0
+            failedCount = 0
+            notificationContent = book.name
+            upAudioCacheNotification()
+            for (index in startIndex..endIndex) {
                 if (!isActive) break
                 val chapter = appDb.bookChapterDao.getChapter(bookUrl, index) ?: continue
+                notificationContent = chapter.title
+                upAudioCacheNotification()
                 AudioCache.saveWaiting(bookUrl, index, chapter.title)
                 appDb.audioChapterCacheDao.updateStatus(
                     bookUrl = bookUrl,
@@ -107,6 +139,8 @@ class AudioCacheService : BaseService() {
                             duration = 0
                         )
                         downloaded = true
+                        finishedCount++
+                        upAudioCacheNotification()
                     }.onFailure {
                         lastError = it
                     }
@@ -118,9 +152,28 @@ class AudioCacheService : BaseService() {
                         index,
                         lastError?.localizedMessage ?: appCtx.getString(android.R.string.unknownName)
                     )
+                    failedCount++
+                    finishedCount++
+                    upAudioCacheNotification()
                 }
             }
             stopSelf()
         }
     }
+
+
+    private fun upAudioCacheNotification() {
+        val progress = if (totalCount > 0) finishedCount else 0
+        notificationBuilder
+            .setContentText(notificationContent)
+            .setSubText("$finishedCount/$totalCount 失败:$failedCount")
+            .setProgress(totalCount, progress, totalCount <= 0)
+        notificationManager.notify(NotificationId.AudioCacheService, notificationBuilder.build())
+    }
+
+    override fun startForegroundNotification() {
+        notificationBuilder.setContentText(notificationContent)
+        startForeground(NotificationId.AudioCacheService, notificationBuilder.build())
+    }
+
 }
