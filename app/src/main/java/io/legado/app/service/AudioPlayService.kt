@@ -18,6 +18,7 @@ import android.support.v4.media.session.PlaybackStateCompat
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.media.AudioFocusRequestCompat
+import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -34,6 +35,7 @@ import io.legado.app.help.config.AppConfig
 import io.legado.app.help.coroutine.Coroutine
 import io.legado.app.help.exoplayer.ExoPlayerHelper
 import io.legado.app.help.glide.ImageLoader
+import io.legado.app.model.AudioCache
 import io.legado.app.model.AudioPlay
 import io.legado.app.model.analyzeRule.AnalyzeUrl
 import io.legado.app.model.analyzeRule.AnalyzeUrl.Companion.getMediaItem
@@ -222,14 +224,26 @@ class AudioPlayService : BaseService(),
             AudioPlay.status = Status.STOP
             postEvent(EventBus.AUDIO_STATE, Status.STOP)
             upPlayProgressJob?.cancel()
-            val analyzeUrl = AnalyzeUrl(
-                url,
-                source = AudioPlay.bookSource,
-                ruleData = AudioPlay.book,
-                chapter = AudioPlay.durChapter,
-                coroutineContext = coroutineContext
-            )
-            exoPlayer.setMediaItem(analyzeUrl.getMediaItem())
+            val bookUrl = AudioPlay.book?.bookUrl
+            val chapterIndex = AudioPlay.durChapterIndex
+            val localCachePath = if (bookUrl != null) {
+                AudioCache.getCachedPath(bookUrl, chapterIndex)
+            } else {
+                null
+            }
+            val mediaItem = if (!localCachePath.isNullOrBlank() && File(localCachePath).exists()) {
+                MediaItem.fromUri(File(localCachePath).toURI().toString())
+            } else {
+                val analyzeUrl = AnalyzeUrl(
+                    url,
+                    source = AudioPlay.bookSource,
+                    ruleData = AudioPlay.book,
+                    chapter = AudioPlay.durChapter,
+                    coroutineContext = coroutineContext
+                )
+                analyzeUrl.getMediaItem()
+            }
+            exoPlayer.setMediaItem(mediaItem)
             exoPlayer.playWhenReady = true
             exoPlayer.seekTo(position.toLong())
             exoPlayer.prepare()
