@@ -55,7 +55,7 @@ class AudioCacheService : BaseService() {
 
     private fun removeBook(bookUrl: String) {
         execute {
-            AudioCache.clearBook(bookUrl)
+            AudioCache.clearBookWithFiles(bookUrl)
         }
     }
 
@@ -76,33 +76,48 @@ class AudioCacheService : BaseService() {
                     chapterIndex = index,
                     status = AudioChapterCache.STATUS_DOWNLOADING
                 )
-                kotlin.runCatching {
-                    val cacheDir = File(FileUtils.getCachePath(), "audio/${bookUrl.hashCode()}")
-                    if (!cacheDir.exists()) cacheDir.mkdirs()
-                    val cacheFile = File(cacheDir, "$index.mp3")
-                    val analyzeUrl = AnalyzeUrl(
-                        chapter.url,
-                        source = source,
-                        ruleData = book,
-                        chapter = chapter,
-                        coroutineContext = coroutineContext
-                    )
-                    analyzeUrl.getInputStream().use { input ->
-                        cacheFile.outputStream().use { output ->
-                            input.copyTo(output)
+                var lastError: Throwable? = null
+                var downloaded = false
+                repeat(3) {
+                    if (!isActive || downloaded) return@repeat
+                    kotlin.runCatching {
+                        val cacheDir = File(FileUtils.getCachePath(), "audio/${bookUrl.hashCode()}")
+                        if (!cacheDir.exists()) cacheDir.mkdirs()
+                        val cacheFile = File(cacheDir, "$index.mp3")
+                        val analyzeUrl = AnalyzeUrl(
+                            chapter.url,
+                            source = source,
+                            ruleData = book,
+                            chapter = chapter,
+                            coroutineContext = coroutineContext
+                        )
+                        val resolvedUrl = analyzeUrl.url
+                        analyzeUrl.getInputStream().use { input ->
+                            cacheFile.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
                         }
+                        AudioCache.saveSuccess(
+                            bookUrl = bookUrl,
+                            chapterIndex = index,
+                            chapterTitle = chapter.title,
+                            audioUrl = resolvedUrl,
+                            audioPath = cacheFile.absolutePath,
+                            audioSize = cacheFile.length(),
+                            duration = 0
+                        )
+                        downloaded = true
+                    }.onFailure {
+                        lastError = it
                     }
-                    AudioCache.saveSuccess(
-                        bookUrl = bookUrl,
-                        chapterIndex = index,
-                        chapterTitle = chapter.title,
-                        audioUrl = chapter.url,
-                        audioPath = cacheFile.absolutePath,
-                        audioSize = cacheFile.length(),
-                        duration = 0
+                    if (!downloaded) kotlinx.coroutines.delay(800L * (it + 1))
+                }
+                if (!downloaded) {
+                    AudioCache.saveFailed(
+                        bookUrl,
+                        index,
+                        lastError?.localizedMessage ?: appCtx.getString(android.R.string.unknownName)
                     )
-                }.onFailure {
-                    AudioCache.saveFailed(bookUrl, index, it.localizedMessage ?: appCtx.getString(android.R.string.unknownName))
                 }
             }
             stopSelf()

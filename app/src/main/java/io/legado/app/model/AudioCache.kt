@@ -5,6 +5,7 @@ import io.legado.app.constant.IntentAction
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.AudioChapterCache
 import io.legado.app.service.AudioCacheService
+import io.legado.app.utils.FileUtils
 import io.legado.app.utils.startService
 
 object AudioCache {
@@ -85,5 +86,13 @@ object AudioCache {
 
     suspend fun clearBook(bookUrl: String) {
         appDb.audioChapterCacheDao.deleteByBook(bookUrl)
+    }
+
+    suspend fun clearBookWithFiles(bookUrl: String) {
+        clearBook(bookUrl)
+        val dir = java.io.File(FileUtils.getCachePath(), "audio/${bookUrl.hashCode()}")
+        if (dir.exists()) {
+            dir.deleteRecursively()
+        }
     }
 }
