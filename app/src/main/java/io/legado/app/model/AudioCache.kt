@@ -1,9 +1,30 @@
 package io.legado.app.model
 
+import android.content.Context
+import io.legado.app.constant.IntentAction
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.AudioChapterCache
+import io.legado.app.service.AudioCacheService
+import io.legado.app.utils.startService
 
 object AudioCache {
+
+    fun start(context: Context, bookUrl: String, start: Int = 0, end: Int = -1) {
+        context.startService<AudioCacheService> {
+            action = IntentAction.start
+            putExtra("bookUrl", bookUrl)
+            putExtra("start", start)
+            putExtra("end", end)
+        }
+    }
+
+    fun remove(context: Context, bookUrl: String) {
+        context.startService<AudioCacheService> {
+            action = IntentAction.remove
+            putExtra("bookUrl", bookUrl)
+        }
+    }
+
 
     suspend fun getChapterCache(bookUrl: String, chapterIndex: Int): AudioChapterCache? {
         return appDb.audioChapterCacheDao.get(bookUrl, chapterIndex)
