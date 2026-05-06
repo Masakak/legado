@@ -26,6 +26,21 @@
         app:showAsAction="never" />
 
     <item
+        android:id="@+id/menu_audio_cache_current"
+        android:title="@string/audio_cache_current_chapter"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/menu_audio_cache_book"
+        android:title="@string/audio_cache_whole_book"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/menu_audio_cache_clear"
+        android:title="@string/audio_cache_clear_book"
+        app:showAsAction="never" />
+
+    <item
         android:id="@+id/menu_wake_lock"
         android:title="@string/audio_play_wake_lock"
         android:checkable="true"

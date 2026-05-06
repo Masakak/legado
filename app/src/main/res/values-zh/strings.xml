@@ -1182,6 +1182,12 @@
     <string name="beta_release_version">测试版</string>
     <string name="beta_releaseA_version">共存版</string>
     <string name="audio_cache">听书缓存</string>
+    <string name="audio_cache_current_chapter">缓存当前章节音频</string>
+    <string name="audio_cache_whole_book">缓存整本音频</string>
+    <string name="audio_cache_clear_book">清空本书音频缓存</string>
+    <string name="audio_cache_task_started">已开始听书缓存任务</string>
+    <string name="audio_cache_clear_confirm">确定清空本书所有音频缓存？</string>
+    <string name="audio_cache_clear_started">已开始清理音频缓存</string>
     <string name="stream_read_aloud_audio">流式播放音频</string>
     <string name="stream_read_aloud_audio_summary">即边下边播，网络不好时播放会断断续续，仅TTS源有效</string>
     <string name="pause_read_aloud_while_phone_calls_title">来电期间暂停朗读</string>

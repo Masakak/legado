@@ -24,6 +24,7 @@ import io.legado.app.help.book.isAudio
 import io.legado.app.help.book.removeType
 import io.legado.app.help.config.AppConfig
 import io.legado.app.lib.dialogs.alert
+import io.legado.app.model.AudioCache
 import io.legado.app.model.AudioPlay
 import io.legado.app.model.BookCover
 import io.legado.app.service.AudioPlayService
@@ -43,6 +44,7 @@ import io.legado.app.utils.sendToClip
 import io.legado.app.utils.showDialogFragment
 import io.legado.app.utils.startActivity
 import io.legado.app.utils.startActivityForBook
+import io.legado.app.utils.toastOnUi
 import io.legado.app.utils.toDurationTime
 import io.legado.app.utils.viewbindingdelegate.viewBinding
 import io.legado.app.utils.visible
@@ -122,6 +124,9 @@ class AudioPlayActivity :
 
             R.id.menu_wake_lock -> AppConfig.audioPlayUseWakeLock = !AppConfig.audioPlayUseWakeLock
             R.id.menu_copy_audio_url -> sendToClip(AudioPlayService.url)
+            R.id.menu_audio_cache_current -> cacheCurrentAudioChapter()
+            R.id.menu_audio_cache_book -> cacheWholeAudioBook()
+            R.id.menu_audio_cache_clear -> clearAudioCache()
             R.id.menu_edit_source -> AudioPlay.bookSource?.let {
                 sourceEditResult.launch {
                     putExtra("sourceUrl", it.bookSourceUrl)
@@ -131,6 +136,40 @@ class AudioPlayActivity :
             R.id.menu_log -> showDialogFragment<AppLogDialog>()
         }
         return super.onCompatOptionsItemSelected(item)
+    }
+
+
+    private fun cacheCurrentAudioChapter() {
+        AudioPlay.book?.bookUrl?.let { bookUrl ->
+            AudioCache.start(this, bookUrl, AudioPlay.durChapterIndex, AudioPlay.durChapterIndex)
+            toastOnUi(R.string.audio_cache_task_started)
+        }
+    }
+
+    private fun cacheWholeAudioBook() {
+        AudioPlay.book?.bookUrl?.let { bookUrl ->
+            alert(R.string.draw) {
+                setMessage(R.string.sure_cache_book)
+                noButton()
+                yesButton {
+                    AudioCache.start(this@AudioPlayActivity, bookUrl)
+                    toastOnUi(R.string.audio_cache_task_started)
+                }
+            }
+        }
+    }
+
+    private fun clearAudioCache() {
+        AudioPlay.book?.bookUrl?.let { bookUrl ->
+            alert(R.string.draw) {
+                setMessage(R.string.audio_cache_clear_confirm)
+                noButton()
+                yesButton {
+                    AudioCache.remove(this@AudioPlayActivity, bookUrl)
+                    toastOnUi(R.string.audio_cache_clear_started)
+                }
+            }
+        }
     }
 
     private fun initView() {
