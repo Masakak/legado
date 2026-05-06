@@ -226,13 +226,13 @@ class AudioPlayService : BaseService(),
             upPlayProgressJob?.cancel()
             val bookUrl = AudioPlay.book?.bookUrl
             val chapterIndex = AudioPlay.durChapterIndex
-            val localCachePath = if (bookUrl != null) {
-                AudioCache.getCachedPath(bookUrl, chapterIndex)
+            val localCacheFile = if (bookUrl != null) {
+                AudioCache.getCachedFile(bookUrl, chapterIndex)
             } else {
                 null
             }
-            val mediaItem = if (!localCachePath.isNullOrBlank() && File(localCachePath).exists()) {
-                MediaItem.fromUri(File(localCachePath).toURI().toString())
+            val mediaItem = if (localCacheFile != null) {
+                MediaItem.fromUri(localCacheFile.toURI().toString())
             } else {
                 val analyzeUrl = AnalyzeUrl(
                     url,

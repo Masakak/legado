@@ -102,6 +102,11 @@ class AudioCacheService : BaseService() {
                 val chapter = appDb.bookChapterDao.getChapter(bookUrl, index) ?: continue
                 notificationContent = chapter.title
                 upAudioCacheNotification()
+                if (AudioCache.getCachedFile(bookUrl, index) != null) {
+                    finishedCount++
+                    upAudioCacheNotification()
+                    continue
+                }
                 AudioCache.saveWaiting(bookUrl, index, chapter.title)
                 appDb.audioChapterCacheDao.updateStatus(
                     bookUrl = bookUrl,

@@ -7,6 +7,7 @@ import io.legado.app.data.entities.AudioChapterCache
 import io.legado.app.service.AudioCacheService
 import io.legado.app.utils.FileUtils
 import io.legado.app.utils.startService
+import java.io.File
 
 object AudioCache {
 
@@ -26,16 +27,22 @@ object AudioCache {
         }
     }
 
-
     suspend fun getChapterCache(bookUrl: String, chapterIndex: Int): AudioChapterCache? {
         return appDb.audioChapterCacheDao.get(bookUrl, chapterIndex)
     }
 
     suspend fun getCachedPath(bookUrl: String, chapterIndex: Int): String? {
+        return getCachedFile(bookUrl, chapterIndex)?.absolutePath
+    }
+
+    suspend fun getCachedFile(bookUrl: String, chapterIndex: Int): File? {
         val cache = getChapterCache(bookUrl, chapterIndex) ?: return null
         if (cache.status != AudioChapterCache.STATUS_SUCCESS) return null
         if (cache.audioPath.isBlank()) return null
-        return cache.audioPath
+        val file = File(cache.audioPath)
+        if (file.exists()) return file
+        saveFailed(bookUrl, chapterIndex, "缓存文件不存在")
+        return null
     }
 
     suspend fun saveWaiting(bookUrl: String, chapterIndex: Int, chapterTitle: String) {
@@ -90,9 +97,19 @@ object AudioCache {
 
     suspend fun clearBookWithFiles(bookUrl: String) {
         clearBook(bookUrl)
-        val dir = java.io.File(FileUtils.getCachePath(), "audio/${bookUrl.hashCode()}")
+        val dir = File(FileUtils.getCachePath(), "audio/${bookUrl.hashCode()}")
         if (dir.exists()) {
             dir.deleteRecursively()
         }
+    }
+
+    suspend fun clearChapterWithFile(bookUrl: String, chapterIndex: Int) {
+        getChapterCache(bookUrl, chapterIndex)?.audioPath?.let { path ->
+            val file = File(path)
+            if (file.exists()) {
+                file.delete()
+            }
+        }
+        appDb.audioChapterCacheDao.delete(bookUrl, chapterIndex)
     }
 }
