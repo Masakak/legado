@@ -28,7 +28,7 @@
         android:singleLine="true"
         app:layout_constraintBottom_toTopOf="@id/barrier"
         app:layout_constraintLeft_toRightOf="@+id/iv_locked"
-        app:layout_constraintRight_toLeftOf="@+id/iv_checked"
+        app:layout_constraintRight_toLeftOf="@+id/iv_audio_cached"
         app:layout_constraintTop_toTopOf="parent" />
 
     <androidx.constraintlayout.widget.Barrier
@@ -60,8 +60,21 @@
         android:visibility="gone"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintLeft_toRightOf="@id/tv_word_count"
-        app:layout_constraintRight_toLeftOf="@+id/iv_checked"
+        app:layout_constraintRight_toLeftOf="@+id/iv_audio_cached"
         app:layout_constraintTop_toBottomOf="@+id/barrier" />
+
+    <ImageView
+        android:id="@+id/iv_audio_cached"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:contentDescription="@string/read_aloud"
+        android:padding="4dp"
+        android:src="@drawable/ic_read_aloud"
+        android:visibility="invisible"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintRight_toLeftOf="@+id/iv_checked"
+        app:layout_constraintTop_toTopOf="parent"
+        app:tint="@color/secondaryText" />
 
     <ImageView
         android:id="@+id/iv_checked"

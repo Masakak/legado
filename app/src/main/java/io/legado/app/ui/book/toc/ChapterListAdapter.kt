@@ -3,6 +3,7 @@ package io.legado.app.ui.book.toc
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.view.View
 import android.view.ViewGroup
 import androidx.recyclerview.widget.DiffUtil
 import io.legado.app.R
@@ -18,7 +19,6 @@ import io.legado.app.lib.theme.ThemeUtils
 import io.legado.app.lib.theme.accentColor
 import io.legado.app.utils.getCompatColor
 import io.legado.app.utils.gone
-import io.legado.app.utils.longToastOnUi
 import io.legado.app.utils.visible
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ensureActive
@@ -29,6 +29,7 @@ class ChapterListAdapter(context: Context, val callback: Callback) :
     DiffRecyclerAdapter<BookChapter, ItemChapterListBinding>(context) {
 
     val cacheFileNames = hashSetOf<String>()
+    val audioCacheChapterIndexes = hashSetOf<Int>()
     private val displayTitleMap = ConcurrentHashMap<String, String>()
     private val handler = Handler(Looper.getMainLooper())
 
@@ -127,6 +128,7 @@ class ChapterListAdapter(context: Context, val callback: Callback) :
             val cached = callback.isLocalBook
                     || item.isVolume
                     || cacheFileNames.contains(item.getFileName())
+            val audioCached = audioCacheChapterIndexes.contains(item.index)
             if (payloads.isEmpty()) {
                 if (isDur) {
                     tvChapterName.setTextColor(context.accentColor)
@@ -166,9 +168,11 @@ class ChapterListAdapter(context: Context, val callback: Callback) :
                 }
 
                 upHasCache(binding, isDur, cached)
+                upAudioCache(binding, audioCached)
             } else {
                 tvChapterName.text = getDisplayTitle(item)
                 upHasCache(binding, isDur, cached)
+                upAudioCache(binding, audioCached)
             }
         }
     }
@@ -180,10 +184,9 @@ class ChapterListAdapter(context: Context, val callback: Callback) :
             }
         }
         holder.itemView.setOnLongClickListener {
-            getItem(holder.layoutPosition)?.let { item ->
-                context.longToastOnUi(getDisplayTitle(item))
-            }
-            true
+            getItem(holder.layoutPosition)
+                ?.let { item -> callback.onChapterLongClick(holder.itemView, item) }
+                ?: true
         }
     }
 
@@ -197,11 +200,15 @@ class ChapterListAdapter(context: Context, val callback: Callback) :
             }
         }
 
+    private fun upAudioCache(binding: ItemChapterListBinding, cached: Boolean) =
+        binding.ivAudioCached.visible(cached)
+
     interface Callback {
         val scope: CoroutineScope
         val book: Book?
         val isLocalBook: Boolean
         fun openChapter(bookChapter: BookChapter)
+        fun onChapterLongClick(view: View, bookChapter: BookChapter): Boolean
         fun durChapterIndex(): Int
         fun onListChanged()
     }

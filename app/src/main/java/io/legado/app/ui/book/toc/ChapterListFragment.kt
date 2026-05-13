@@ -6,6 +6,7 @@ import android.content.Intent
 import android.graphics.PorterDuff
 import android.os.Bundle
 import android.view.View
+import androidx.appcompat.widget.PopupMenu
 import androidx.fragment.app.activityViewModels
 import androidx.lifecycle.lifecycleScope
 import io.legado.app.R
@@ -15,16 +16,21 @@ import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookChapter
 import io.legado.app.databinding.FragmentChapterListBinding
+import io.legado.app.help.audio.HttpTtsAudioCache
 import io.legado.app.help.book.BookHelp
 import io.legado.app.help.book.isLocal
 import io.legado.app.help.book.simulatedTotalChapterNum
+import io.legado.app.help.config.AppConfig
+import io.legado.app.lib.dialogs.alert
 import io.legado.app.lib.theme.bottomBackground
 import io.legado.app.lib.theme.getPrimaryTextColor
+import io.legado.app.service.HttpTtsPreCacheService
 import io.legado.app.ui.widget.recycler.UpLinearLayoutManager
 import io.legado.app.ui.widget.recycler.VerticalDivider
 import io.legado.app.utils.ColorUtils
 import io.legado.app.utils.applyNavigationBarPadding
 import io.legado.app.utils.observeEvent
+import io.legado.app.utils.toastOnUi
 import io.legado.app.utils.viewbindingdelegate.viewBinding
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers.Default
@@ -86,6 +92,7 @@ class ChapterListFragment : VMBaseFragment<TocViewModel>(R.layout.fragment_chapt
             binding.tvCurrentChapterInfo.text =
                 "${book.durChapterTitle}(${book.durChapterIndex + 1}/${book.simulatedTotalChapterNum()})"
             initCacheFileNames(book)
+            initAudioCacheChapterIndexes(book)
         }
     }
 
@@ -94,6 +101,12 @@ class ChapterListFragment : VMBaseFragment<TocViewModel>(R.layout.fragment_chapt
             adapter.cacheFileNames.addAll(BookHelp.getChapterFiles(book))
             withContext(Main) {
                 adapter.notifyItemRangeChanged(0, adapter.itemCount, true)
+            }
+        }
+        observeEvent<Pair<String, Int>>(EventBus.HTTP_TTS_CACHE) { (bookUrl, chapterIndex) ->
+            if (viewModel.bookData.value?.bookUrl == bookUrl) {
+                adapter.audioCacheChapterIndexes.add(chapterIndex)
+                notifyChapterAudioCacheChanged(chapterIndex)
             }
         }
     }
@@ -179,6 +192,123 @@ class ChapterListFragment : VMBaseFragment<TocViewModel>(R.layout.fragment_chapt
                     .putExtra("chapterChanged", bookChapter.index != durChapterIndex)
             )
             finish()
+        }
+    }
+
+    override fun onChapterLongClick(view: View, bookChapter: BookChapter): Boolean {
+        val book = book ?: return true
+        PopupMenu(requireContext(), view).apply {
+            menu.add(0, 1, 0, "缓存本章 HTTP TTS")
+            menu.add(0, 2, 1, "缓存后续 10 章 HTTP TTS")
+            menu.add(0, 3, 2, "删除本章 HTTP TTS 缓存")
+            menu.add(0, 4, 3, "清空全部 HTTP TTS 缓存")
+            setOnMenuItemClickListener { item ->
+                when (item.itemId) {
+                    1 -> {
+                        startHttpTtsCache(book, listOf(bookChapter.index))
+                        true
+                    }
+
+                    2 -> {
+                        val end = minOf(bookChapter.index + 9, book.lastChapterIndex)
+                        startHttpTtsCache(book, (bookChapter.index..end).toList())
+                        true
+                    }
+
+                    3 -> {
+                        deleteHttpTtsCache(book, bookChapter.index)
+                        true
+                    }
+
+                    4 -> {
+                        deleteAllHttpTtsCache()
+                        true
+                    }
+
+                    else -> false
+                }
+            }
+        }.show()
+        return true
+    }
+
+    private fun initAudioCacheChapterIndexes(book: Book) {
+        val context = requireContext().applicationContext
+        lifecycleScope.launch(IO) {
+            val ttsUrl = getHttpTtsUrl(book)
+            val indexes = if (ttsUrl == null) {
+                emptySet()
+            } else {
+                HttpTtsAudioCache.getCachedChapterIndexes(
+                    context,
+                    book.bookUrl,
+                    ttsUrl,
+                    AppConfig.speechRatePlay + 5
+                )
+            }
+            withContext(Main) {
+                adapter.audioCacheChapterIndexes.clear()
+                adapter.audioCacheChapterIndexes.addAll(indexes)
+                adapter.notifyItemRangeChanged(0, adapter.itemCount, true)
+            }
+        }
+    }
+
+    private fun startHttpTtsCache(book: Book, chapterIndexes: List<Int>) {
+        val engine = book.getTtsEngine() ?: AppConfig.ttsEngine
+        if (engine?.toLongOrNull() == null) {
+            requireContext().toastOnUi("当前朗读引擎不是 HTTP TTS")
+            return
+        }
+        HttpTtsPreCacheService.start(requireContext(), book.bookUrl, chapterIndexes)
+        requireContext().toastOnUi("已加入 HTTP TTS 缓存队列")
+    }
+
+    private fun deleteHttpTtsCache(book: Book, chapterIndex: Int) {
+        val context = requireContext().applicationContext
+        lifecycleScope.launch(IO) {
+            HttpTtsAudioCache.deleteChapter(context, book.bookUrl, chapterIndex)
+            withContext(Main) {
+                adapter.audioCacheChapterIndexes.remove(chapterIndex)
+                notifyChapterAudioCacheChanged(chapterIndex)
+                requireContext().toastOnUi("已删除本章 HTTP TTS 缓存")
+            }
+        }
+    }
+
+    private fun deleteAllHttpTtsCache() {
+        alert("清空 HTTP TTS 缓存", "确定清空全部 HTTP TTS 音频缓存？") {
+            yesButton {
+                val context = requireContext().applicationContext
+                lifecycleScope.launch(IO) {
+                    HttpTtsAudioCache.deleteAll(context)
+                    withContext(Main) {
+                        adapter.audioCacheChapterIndexes.clear()
+                        adapter.notifyItemRangeChanged(0, adapter.itemCount, true)
+                        requireContext().toastOnUi("已清空 HTTP TTS 缓存")
+                    }
+                }
+            }
+            noButton()
+        }
+    }
+
+    private fun notifyChapterAudioCacheChanged(chapterIndex: Int) {
+        if (viewModel.searchKey.isNullOrEmpty()) {
+            adapter.notifyItemChanged(chapterIndex, true)
+        } else {
+            adapter.getItems().forEachIndexed { index, bookChapter ->
+                if (bookChapter.index == chapterIndex) {
+                    adapter.notifyItemChanged(index, true)
+                }
+            }
+        }
+    }
+
+    private fun getHttpTtsUrl(book: Book): String? {
+        val engine = book.getTtsEngine() ?: AppConfig.ttsEngine
+        return engine?.toLongOrNull()?.let {
+            appDb.httpTTSDao.get(it)?.url
         }
     }
 
