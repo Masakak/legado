@@ -200,8 +200,10 @@ class ChapterListFragment : VMBaseFragment<TocViewModel>(R.layout.fragment_chapt
         PopupMenu(requireContext(), view).apply {
             menu.add(0, 1, 0, "缓存本章 HTTP TTS")
             menu.add(0, 2, 1, "缓存后续 10 章 HTTP TTS")
-            menu.add(0, 3, 2, "删除本章 HTTP TTS 缓存")
-            menu.add(0, 4, 3, "清空全部 HTTP TTS 缓存")
+            menu.add(0, 3, 2, "缓存后续 100 章 HTTP TTS")
+            menu.add(0, 4, 3, "缓存后续所有章节 HTTP TTS")
+            menu.add(0, 5, 4, "删除本章 HTTP TTS 缓存")
+            menu.add(0, 6, 5, "清空全部 HTTP TTS 缓存")
             setOnMenuItemClickListener { item ->
                 when (item.itemId) {
                     1 -> {
@@ -211,16 +213,27 @@ class ChapterListFragment : VMBaseFragment<TocViewModel>(R.layout.fragment_chapt
 
                     2 -> {
                         val end = minOf(bookChapter.index + 9, book.lastChapterIndex)
-                        startHttpTtsCache(book, (bookChapter.index..end).toList())
+                        startHttpTtsCache(book, bookChapter.index, end)
                         true
                     }
 
                     3 -> {
-                        deleteHttpTtsCache(book, bookChapter.index)
+                        val end = minOf(bookChapter.index + 99, book.lastChapterIndex)
+                        startHttpTtsCache(book, bookChapter.index, end)
                         true
                     }
 
                     4 -> {
+                        startHttpTtsCache(book, bookChapter.index, book.lastChapterIndex)
+                        true
+                    }
+
+                    5 -> {
+                        deleteHttpTtsCache(book, bookChapter.index)
+                        true
+                    }
+
+                    6 -> {
                         deleteAllHttpTtsCache()
                         true
                     }
@@ -255,13 +268,29 @@ class ChapterListFragment : VMBaseFragment<TocViewModel>(R.layout.fragment_chapt
     }
 
     private fun startHttpTtsCache(book: Book, chapterIndexes: List<Int>) {
+        if (!checkHttpTtsEngine(book)) return
+        HttpTtsPreCacheService.start(requireContext(), book.bookUrl, chapterIndexes)
+        requireContext().toastOnUi("已加入 HTTP TTS 缓存队列")
+    }
+
+    private fun startHttpTtsCache(book: Book, startChapterIndex: Int, endChapterIndex: Int) {
+        if (!checkHttpTtsEngine(book)) return
+        HttpTtsPreCacheService.startRange(
+            requireContext(),
+            book.bookUrl,
+            startChapterIndex,
+            endChapterIndex
+        )
+        requireContext().toastOnUi("已加入 HTTP TTS 缓存队列")
+    }
+
+    private fun checkHttpTtsEngine(book: Book): Boolean {
         val engine = book.getTtsEngine() ?: AppConfig.ttsEngine
         if (engine?.toLongOrNull() == null) {
             requireContext().toastOnUi("当前朗读引擎不是 HTTP TTS")
-            return
+            return false
         }
-        HttpTtsPreCacheService.start(requireContext(), book.bookUrl, chapterIndexes)
-        requireContext().toastOnUi("已加入 HTTP TTS 缓存队列")
+        return true
     }
 
     private fun deleteHttpTtsCache(book: Book, chapterIndex: Int) {

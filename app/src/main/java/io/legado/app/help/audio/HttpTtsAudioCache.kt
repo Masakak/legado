@@ -4,19 +4,24 @@ import android.content.Context
 import com.google.gson.reflect.TypeToken
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookChapter
+import io.legado.app.data.appDb
+import io.legado.app.help.book.ContentProcessor
 import io.legado.app.utils.FileUtils
 import io.legado.app.utils.GSON
 import io.legado.app.utils.MD5Utils
 import java.io.File
 import java.io.InputStream
+import java.io.IOException
 
 object HttpTtsAudioCache {
 
     private const val audioFolderName = "httpTTS"
     private const val streamCacheFolderName = "httpTTS_cache"
     private const val indexFileName = "httpTTS_index.json"
+    private const val fileLockSize = 64
 
     private val lock = Any()
+    private val fileLocks = Array(fileLockSize) { Any() }
     private val indexType by lazy {
         object : TypeToken<MutableMap<String, ChapterCache>>() {}.type
     }
@@ -63,9 +68,28 @@ object HttpTtsAudioCache {
     }
 
     fun writeSpeakFile(context: Context, fileName: String, inputStream: InputStream) {
-        createSpeakFile(context, fileName).outputStream().use { out ->
-            inputStream.use {
-                it.copyTo(out)
+        synchronized(fileLock(fileName)) {
+            val destFile = getSpeakFile(context, fileName)
+            if (destFile.exists()) {
+                inputStream.close()
+                return@synchronized
+            }
+            destFile.parentFile?.mkdirs()
+            val tempFile = File(destFile.parentFile, "${destFile.name}.${System.nanoTime()}.tmp")
+            try {
+                tempFile.outputStream().use { out ->
+                    inputStream.use {
+                        it.copyTo(out)
+                    }
+                }
+                if (destFile.exists()) {
+                    tempFile.delete()
+                } else if (!tempFile.renameTo(destFile)) {
+                    throw IOException("Rename ${tempFile.name} to ${destFile.name} failed")
+                }
+            } catch (e: Throwable) {
+                tempFile.delete()
+                throw e
             }
         }
     }
@@ -162,6 +186,38 @@ object HttpTtsAudioCache {
         saveIndexLocked(context, index)
     }
 
+    fun deleteBook(context: Context, bookUrl: String) = synchronized(lock) {
+        deleteBookLocked(context, bookUrl, emptySet())
+    }
+
+    fun deleteBook(context: Context, book: Book) {
+        val titlePrefixes = getBookTitlePrefixes(book)
+        synchronized(lock) {
+            deleteBookLocked(context, book.bookUrl, titlePrefixes)
+        }
+    }
+
+    private fun deleteBookLocked(
+        context: Context,
+        bookUrl: String,
+        titlePrefixes: Set<String>
+    ) {
+        val index = loadIndexLocked(context)
+        val removing = index.filterValues {
+            it.bookUrl == bookUrl
+        }
+        val prefixFiles = getPrefixFiles(context, titlePrefixes)
+        if (removing.isEmpty() && prefixFiles.isEmpty()) return
+        val removingKeys = removing.keys
+        val removingFiles = removing.values.flatMap { it.fileNames }.toSet() + prefixFiles
+        removingKeys.forEach { index.remove(it) }
+        val usedFiles = index.values.flatMap { it.fileNames }.toSet()
+        removingFiles
+            .filterNot { usedFiles.contains(it) }
+            .forEach { getSpeakFile(context, it).delete() }
+        saveIndexLocked(context, index)
+    }
+
     fun deleteAll(context: Context) = synchronized(lock) {
         FileUtils.delete(getAudioDir(context), true)
         FileUtils.delete(getStreamCacheDir(context), true)
@@ -185,6 +241,33 @@ object HttpTtsAudioCache {
 
     private fun getIndexFile(context: Context): File {
         return File(context.filesDir, indexFileName)
+    }
+
+    private fun fileLock(fileName: String): Any {
+        val index = (fileName.hashCode() and Int.MAX_VALUE) % fileLockSize
+        return fileLocks[index]
+    }
+
+    private fun getBookTitlePrefixes(book: Book): Set<String> {
+        val contentProcessor = ContentProcessor.get(book.name, book.origin)
+        val titleReplaceRules = contentProcessor.getTitleReplaceRules()
+        val useReplace = book.getUseReplaceRule()
+        return appDb.bookChapterDao.getChapterList(book.bookUrl)
+            .map {
+                MD5Utils.md5Encode16(it.getDisplayTitle(titleReplaceRules, useReplace)) + "_"
+            }
+            .toSet()
+    }
+
+    private fun getPrefixFiles(context: Context, titlePrefixes: Set<String>): Set<String> {
+        if (titlePrefixes.isEmpty()) return emptySet()
+        return getAudioDir(context).listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.extension == "mp3" }
+            ?.map { it.name.removeSuffix(".mp3") }
+            ?.filter { fileName -> titlePrefixes.any { fileName.startsWith(it) } }
+            ?.toSet()
+            .orEmpty()
     }
 
     private fun loadIndexLocked(context: Context): MutableMap<String, ChapterCache> {

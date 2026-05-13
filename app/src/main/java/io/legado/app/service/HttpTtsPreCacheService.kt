@@ -33,14 +33,19 @@ import io.legado.app.utils.startForegroundServiceCompat
 import io.legado.app.utils.toastOnUi
 import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import splitties.init.appCtx
 import splitties.systemservices.notificationManager
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * HTTP TTS 章节音频预缓存服务
@@ -51,6 +56,8 @@ class HttpTtsPreCacheService : BaseService() {
 
         private const val extraBookUrl = "bookUrl"
         private const val extraChapters = "chapters"
+        private const val extraStartChapter = "startChapter"
+        private const val extraEndChapter = "endChapter"
 
         fun start(context: Context, bookUrl: String, chapterIndexes: List<Int>) {
             if (chapterIndexes.isEmpty()) return
@@ -58,6 +65,22 @@ class HttpTtsPreCacheService : BaseService() {
                 action = IntentAction.start
                 putExtra(extraBookUrl, bookUrl)
                 putIntegerArrayListExtra(extraChapters, ArrayList(chapterIndexes.distinct()))
+            }
+            context.startForegroundServiceCompat(intent)
+        }
+
+        fun startRange(
+            context: Context,
+            bookUrl: String,
+            startChapterIndex: Int,
+            endChapterIndex: Int
+        ) {
+            if (endChapterIndex < startChapterIndex) return
+            val intent = Intent(context, HttpTtsPreCacheService::class.java).apply {
+                action = IntentAction.start
+                putExtra(extraBookUrl, bookUrl)
+                putExtra(extraStartChapter, startChapterIndex)
+                putExtra(extraEndChapter, endChapterIndex)
             }
             context.startForegroundServiceCompat(intent)
         }
@@ -71,10 +94,16 @@ class HttpTtsPreCacheService : BaseService() {
     }
 
     private data class ChapterTask(val bookUrl: String, val chapterIndex: Int)
+    private data class ParagraphAudioTask(
+        val speakText: String,
+        val fileName: String
+    )
 
     private val pendingTasks = linkedSetOf<ChapterTask>()
     private var cacheJob: Job? = null
     private var notificationContent = appCtx.getString(R.string.service_starting)
+    private val paragraphConcurrency: Int
+        get() = AppConfig.threadCount.coerceIn(1, 4)
     private val notificationBuilder by lazy {
         NotificationCompat.Builder(this, AppConst.channelIdDownload)
             .setSmallIcon(R.drawable.ic_download)
@@ -95,9 +124,22 @@ class HttpTtsPreCacheService : BaseService() {
             else -> {
                 val bookUrl = intent?.getStringExtra(extraBookUrl)
                 val chapters = intent?.getIntegerArrayListExtra(extraChapters)
-                if (!bookUrl.isNullOrBlank() && !chapters.isNullOrEmpty()) {
-                    addTasks(bookUrl, chapters)
-                    startCacheJobIfNeed()
+                if (!bookUrl.isNullOrBlank()) {
+                    when {
+                        !chapters.isNullOrEmpty() -> {
+                            addTasks(bookUrl, chapters)
+                            startCacheJobIfNeed()
+                        }
+
+                        else -> {
+                            val startChapter = intent.getIntExtra(extraStartChapter, -1)
+                            val endChapter = intent.getIntExtra(extraEndChapter, -1)
+                            if (startChapter >= 0 && endChapter >= startChapter) {
+                                addTasks(bookUrl, startChapter..endChapter)
+                                startCacheJobIfNeed()
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -118,7 +160,7 @@ class HttpTtsPreCacheService : BaseService() {
     }
 
     @Synchronized
-    private fun addTasks(bookUrl: String, chapterIndexes: List<Int>) {
+    private fun addTasks(bookUrl: String, chapterIndexes: Iterable<Int>) {
         chapterIndexes.forEach { index ->
             pendingTasks.add(ChapterTask(bookUrl, index))
         }
@@ -221,39 +263,52 @@ class HttpTtsPreCacheService : BaseService() {
         readAloudByPage: Boolean,
         readAloudContents: List<String>
     ) {
-        val errorCounter = HttpTtsAudioDownloader.ErrorCounter()
-        val fileNames = linkedSetOf<String>()
-        val speakableCount = readAloudContents.count {
-            it.replace(AppPattern.notReadAloudRegex, "").isNotEmpty()
-        }
-        readAloudContents.forEachIndexed { index, content ->
-            currentCoroutineContext().ensureActive()
+        val paragraphTasks = readAloudContents.mapNotNull { content ->
             val speakText = content.replace(AppPattern.notReadAloudRegex, "")
-            if (speakText.isEmpty()) return@forEachIndexed
-            val fileName = HttpTtsAudioCache.speakFileName(
-                httpTts.url,
-                speechRate,
-                content,
-                displayTitle
-            )
-            if (!HttpTtsAudioCache.hasSpeakFile(this, fileName)) {
-                notificationContent =
-                    "缓存中 ${index + 1}/${readAloudContents.size}：${chapter.title}"
-                upNotification()
-                val stream = HttpTtsAudioDownloader.getSpeakStream(
-                    httpTts,
+            if (speakText.isEmpty()) {
+                null
+            } else {
+                ParagraphAudioTask(
                     speakText,
-                    speechRate,
-                    errorCounter
+                    HttpTtsAudioCache.speakFileName(
+                        httpTts.url,
+                        speechRate,
+                        content,
+                        displayTitle
+                    )
                 )
-                if (stream != null) {
-                    HttpTtsAudioCache.writeSpeakFile(this, fileName, stream)
-                }
             }
-            if (HttpTtsAudioCache.hasSpeakFile(this, fileName)) {
-                fileNames.add(fileName)
-            }
+        }.distinctBy { it.fileName }
+        val totalCount = paragraphTasks.size
+        val doneCount = AtomicInteger(0)
+        if (totalCount > 0) {
+            notificationContent = "缓存中 0/$totalCount：${chapter.title}"
+            upNotification()
         }
+        val semaphore = Semaphore(paragraphConcurrency)
+        val fileNames = coroutineScope {
+            paragraphTasks.map { paragraphTask ->
+                async {
+                    semaphore.withPermit {
+                        currentCoroutineContext().ensureActive()
+                        val fileName = downloadParagraphAudio(
+                            book.bookUrl,
+                            paragraphTask,
+                            httpTts,
+                            speechRate
+                        )
+                        val done = doneCount.incrementAndGet()
+                        if (done == totalCount || done % 5 == 0) {
+                            notificationContent = "缓存中 $done/$totalCount：${chapter.title}"
+                            upNotification()
+                        }
+                        fileName
+                    }
+                }
+            }.awaitAll()
+        }.filterNotNull().distinct()
+        val complete = fileNames.size == totalCount
+        if (!appDb.bookDao.has(book.bookUrl)) return
         HttpTtsAudioCache.updateChapterCache(
             this,
             book,
@@ -264,11 +319,40 @@ class HttpTtsPreCacheService : BaseService() {
             readAloudByPage,
             HttpTtsAudioCache.contentHash(readAloudContents),
             fileNames,
-            complete = fileNames.size == speakableCount
+            complete = complete
         )
         AppLog.putDebug("HTTP TTS缓存完成 ${book.name}-${chapter.title}")
-        if (fileNames.size == speakableCount) {
+        if (complete) {
             postEvent(EventBus.HTTP_TTS_CACHE, Pair(book.bookUrl, chapter.index))
+        }
+    }
+
+    private suspend fun downloadParagraphAudio(
+        bookUrl: String,
+        paragraphTask: ParagraphAudioTask,
+        httpTts: HttpTTS,
+        speechRate: Int
+    ): String? {
+        if (!appDb.bookDao.has(bookUrl)) return null
+        if (!HttpTtsAudioCache.hasSpeakFile(this, paragraphTask.fileName)) {
+            val stream = HttpTtsAudioDownloader.getSpeakStream(
+                httpTts,
+                paragraphTask.speakText,
+                speechRate,
+                HttpTtsAudioDownloader.ErrorCounter()
+            )
+            if (stream != null) {
+                if (!appDb.bookDao.has(bookUrl)) {
+                    stream.close()
+                    return null
+                }
+                HttpTtsAudioCache.writeSpeakFile(this, paragraphTask.fileName, stream)
+            }
+        }
+        return if (HttpTtsAudioCache.hasSpeakFile(this, paragraphTask.fileName)) {
+            paragraphTask.fileName
+        } else {
+            null
         }
     }
 
